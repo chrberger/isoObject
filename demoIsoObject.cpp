@@ -1,6 +1,8 @@
 
 #include <chrono>
 
+#include "cluon-complete.hpp"
+#include "opendlv-standard-message-set.hpp"
 
 #include "iso22133object.hpp"
 #include "printUtil.hpp"
@@ -22,6 +24,7 @@ static po::variables_map parseArguments(
 	po::options_description desc("Allowed options");
 	desc.add_options()
 		("help,h", "print this message")
+		("cid,c", po::value<uint16_t>()->default_value(111), "cid")
 		("listen-ip,i", po::value<std::string>()->default_value("0.0.0.0"), "The IP address that the isoObject will listen on.")
 	;
 	po::store(po::parse_command_line(argc, argv, desc), ret);
@@ -206,6 +209,19 @@ int main(int argc, char** argv ) {
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+
+    // Receive GPS position from SnowFox in separate thread and hand over to ISO object in thread-safe way.
+    std::mutex pos_mutex;
+    float lat{0}, lon{0};
+    cluon::OD4Session od4{args["cid"].as<uint16_t>()};
+    auto onGeodeticWgs84Reading{[&pos_mutex, &lat, &lon](cluon::data::Envelope &&envelope) {
+        auto msg = cluon::extractMessage<opendlv::proxy::GeodeticWgs84Reading>(std::move(envelope));
+        std::lock_guard<std::mutex> lck(pos_mutex);
+        lat = msg.latitude();
+        lon = msg.longitude();
+      }
+    };
+    od4.dataTrigger(opendlv::proxy::GeodeticWgs84Reading::ID(), onGeodeticWgs84Reading);
     
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -218,6 +234,11 @@ int main(int argc, char** argv ) {
         z = originZ + radius/2 * sin(angle);
         if (z < 0) {
             z = 0;
+        }
+
+        {
+          std::lock_guard<std::mutex> lck(pos_mutex);
+          std::cout <<lat << ", " << lon << std::endl;
         }
         // Todo calculate heading and speed
         obj.setMonr(x, y, z, 0.0, 0.0, 0.0);
