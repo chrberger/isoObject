@@ -3,6 +3,7 @@
 
 #include "cluon-complete.hpp"
 #include "opendlv-standard-message-set.hpp"
+#include "WGS84toCartesian.hpp"
 
 #include "iso22133object.hpp"
 #include "printUtil.hpp"
@@ -76,6 +77,10 @@ class myObject : public ISO22133::TestObject {
 public:
     std::vector<TrajectoryWaypointType> trajectory;
 
+    std::mutex obj_mutex;
+    float lat{0}, lon{0};
+    float latOrigin{0}, lonOrigin{0};
+
     void setMonr(double x,
                  double y, 
                  double z, 
@@ -139,6 +144,13 @@ public:
         PRINT_STRUCT(ObjectSettingsType, &osem,
             PRINT_FIELD(TestModeType, testMode)
         )
+
+        {
+          std::lock_guard<std::mutex> lck(obj_mutex);
+          latOrigin = osem.coordinateSystemOrigin.latitude_deg;
+          lonOrigin = osem.coordinateSystemOrigin.longitude_deg;
+        }
+        //std::cout << osem.coordinateSystemOrigin.latitude_deg << ";" <<  osem.coordinateSystemOrigin.longitude_deg << std::endl;
 
     }
 
@@ -211,14 +223,12 @@ int main(int argc, char** argv ) {
     double z = 0.0;
 
     // Receive GPS position from SnowFox in separate thread and hand over to ISO object in thread-safe way.
-    std::mutex pos_mutex;
-    float lat{0}, lon{0};
     cluon::OD4Session od4{args["cid"].as<uint16_t>()};
-    auto onGeodeticWgs84Reading{[&pos_mutex, &lat, &lon](cluon::data::Envelope &&envelope) {
+    auto onGeodeticWgs84Reading{[&obj](cluon::data::Envelope &&envelope) {
         auto msg = cluon::extractMessage<opendlv::proxy::GeodeticWgs84Reading>(std::move(envelope));
-        std::lock_guard<std::mutex> lck(pos_mutex);
-        lat = msg.latitude();
-        lon = msg.longitude();
+        std::lock_guard<std::mutex> lck(obj.obj_mutex);
+        obj.lat = msg.latitude();
+        obj.lon = msg.longitude();
       }
     };
     od4.dataTrigger(opendlv::proxy::GeodeticWgs84Reading::ID(), onGeodeticWgs84Reading);
@@ -237,8 +247,13 @@ int main(int argc, char** argv ) {
         }
 
         {
-          std::lock_guard<std::mutex> lck(pos_mutex);
-          std::cout <<lat << ", " << lon << std::endl;
+          // Convert from WGS84 to Cartesian.
+          std::lock_guard<std::mutex> lck(obj.obj_mutex);
+          if (obj.latOrigin > 0 || obj.lonOrigin > 0) {
+            std::array<double, 2> cartesianPosition = wgs84::toCartesian({obj.latOrigin, obj.lonOrigin} /* reference position */, {obj.lat, obj.lon} /* position to be converted */);
+            x = cartesianPosition[0];
+            y = cartesianPosition[1];
+          }
         }
         // Todo calculate heading and speed
         obj.setMonr(x, y, z, 0.0, 0.0, 0.0);
