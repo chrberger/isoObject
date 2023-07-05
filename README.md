@@ -1,3 +1,9 @@
+# Running on SnowFox:
+
+```
+docker run --rm --init -ti --net=host --privileged docker.io/chrberger/atos_isoobject:latest --cid=111 --verbose
+```
+
 # ISO22133 Object
 
 This is a iso22133 test object template class. This is intended to be used by 
